@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" href="/css/style.css" />
+		<!-- <script src="https://static.opentok.com/v2/js/opentok.min.js"></script> -->
+		<script src="/opentok-build-3.js"></script>
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+	
+	</head>
+	<body>
+		<div class="title" style="padding: 10px; background-color: white; height: 230px;">
+			Share this link for people to join<br /><input
+				type="text"
+				style="margin: 10px; width: calc(100% - 500px);"
+				id="link"
+				value="Starting Session"
+				readonly
+			/>
+			<button onclick="copyLink('link')">Copy Link</button><br /><br />
+
+			Use this link to create tokens<br /><input
+				type="text"
+				style="margin: 10px; width: calc(100% - 500px);"
+				id="token"
+				value="Starting Session"
+				readonly
+			/>
+			<button onclick="copyLink('token')">Copy Link</button><br /><br />
+		<br /><br />
+			
+
+			<span>
+				<button
+					id="deepgram_button"
+					style="color: white; padding: 5px; background-color: darkslategrey;"
+					onclick="toggleDeepgram()">
+					Start Deepgram</button>
+			</span>
+
+		
+		</div>
+
+		<div>
+			<div id="subscriber"></div>
+			<div id="publisher"></div>
+		
+		</div>
+		
+		<div id="transcription" style="
+				height: 60px;
+				overflow: scroll;
+				bottom: 0;
+				position: absolute;
+				width: 100%;
+				background: seashell;
+				padding: 10px;
+				border-width: medium;
+				border-color: black;
+			">
+			<div id="deepgram">
+				<div>Transcription Log:<br></div>
+			</div>
+		</div>
+			
+
+		<script src="/js/client.js"  type="module"></script>
+	</body>
+</html>
+<script>
+	var deepgram_in_use = false;
+	$( document ).ready(function() {
+    	msg_div = document.getElementById( "transcription" );
+
+	});
+	
+	var ws = new WebSocket("<%=websocket_server_uri%>");
+	ws.onopen = (event) => {
+		var msg = {
+				command : "set_id",
+				id : "client_<%=sessionId%>"
+			};
+	ws.send(JSON.stringify(msg));
+	}
+	
+	$(async function () {
+		startSession('<%=sessionId%>', '<%=token%>', '<%=appId%>').then(function (result) {
+			$('#link').val(window.location.protocol+"//" + window.location.hostname+'/<%=sessionId%>/join');
+			$('#token').val(window.location.protocol+"//" + window.location.hostname+'/<%=sessionId%>/token');
+		});
+	});
+
+	function copyLink(id) {
+		var copyText = document.getElementById(id);
+		copyText.select();
+		copyText.setSelectionRange(0, 99999);
+		document.execCommand('copy');
+	}
+
+
+	function toggleDeepgram() {
+		var button = $('#deepgram_button');
+		//turn on
+		if (deepgram_in_use == false) {
+			button.text('Starting Deepgram');
+			button.css('background-color', 'Orange');
+			$.ajax({
+				method: 'GET',
+				url: '/<%=sessionId%>/audioconnect',
+			}).done(function (msg) {
+				deepgram_in_use = true;
+				console.log(msg);
+				button.text('Stop Deepgram');
+				button.css('background-color', 'darkgreen');
+			
+				
+				
+			}).fail(function (){
+				alert("Deepgram startup failed")
+				button.text('Start Deepgram');
+				button.css('background-color', 'darkslategrey');
+			});
+
+		//turn off
+		} else {
+			var msg = {
+			    command : "close_audio_connector",
+			    sessionid : "<%=sessionId%>"
+			};
+			button.text('Start Deepgram');
+			button.css('background-color', 'darkslategrey');
+			deepgram_in_use = false
+			ws.send(JSON.stringify(msg));
+		}
+	}
+
+	ws.onmessage = function( evt ) {
+		data = JSON.parse(evt.data)
+		console.log(data)
+		if(data.sessionid == "<%=sessionId%>"){
+			for (const [key, value] of Object.entries(data.messages)) {
+				console.log(key, value);
+				$("#deepgram").html($("#deepgram").html() + "<div>Speaker "+ key+" -> "+new Date().toLocaleTimeString()+" : "+value+"</div>");
+			}
+			
+
+			$("#transcription").animate({ scrollTop: $('#transcription').prop("scrollHeight")}, 100);
+			
+		}
+		
+	};
+</script>
