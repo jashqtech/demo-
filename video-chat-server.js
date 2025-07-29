@@ -1,4 +1,5 @@
 require('dotenv').config();
+var request = require('request');
 var express = require('express');
 var cors = require('cors');
 var path = require('path');
@@ -19,8 +20,10 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use('/', express.static(path.join(__dirname, 'views')));
 const fetch = require("cross-fetch");
-
+const translate = require('google-translate-api-x');
+const fs = require("fs");
 const { createClient,LiveTranscriptionEvents } = require("@deepgram/sdk");
+const { Vonage } = require('@vonage/server-sdk');
 // - or -
 // import { createClient } from "@deepgram/sdk";
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
@@ -99,11 +102,41 @@ app.get('/:sessionId/streams', async function (req, res) {
 
 //Start an Audio Connector Session
 app.get('/:sessionId/audioconnect', async function (req, res) {
-	console.log("A connect")
+	console.log("Audio connect")
 	token = videoClient.generateClientToken(sessionId);
-	result = await videoClient.connectToWebsocket(req.params['sessionId'], token, {"uri":socketUriForStream, "headers": {"sessionid": req.params['sessionId']}})
+	
+	// var options = {
+	// 	'method': 'POST',
+	// 	'url': `https://video.api.vonage.com/v2/project/${appId}/connect`,
+	// 	'headers': {
+	// 		'Content-Type': 'application/json',
+	// 		'Authorization': `Bearer ${token}`
+	// 	},
+	// 	body: JSON.stringify({
+	// 		"sessionId": sessionId,
+	// 		"token": token,
+	// 		"websocket": {
+	// 			"uri": socketUriForStream,
+	// 			"headers": {
+	// 				"sessionid": sessionId
+	// 			},
+	// 			"audioRate": 8000,
+	// 			"bidirectional": false
+	// 		}
+	// 	})
+	
+	// };
+	// await request(options, function (error, response) {
+	// 	if (error){
+	// 		console.log('Error:', error.message);
+	// 		return res.json({success:false,message:"Audio Connector failed to connect to socket"}, 401);			
+	// 	} 
+	// 	console.log('Audio Socket websocket connected', response.body);
+	//   return res.json({success:true,message:"Audio Connecter connected to socket"}, 200);
+	// });
+	
+	result = await videoClient.connectToWebsocket(req.params['sessionId'], token, {"uri":socketUriForStream, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
 	console.log("AC::", result)
-	//return 0
 	if (result.connectionId!=null) {
 		console.log('Audio Socket websocket connected');
 		return res.json({success:true,message:"Audio Connecter connected to socket"}, 200);
@@ -112,16 +145,71 @@ app.get('/:sessionId/audioconnect', async function (req, res) {
 		console.log('Error:', error.message);
 		return res.json({success:false,message:"Audio Connector failed to connect to socket"}, 401);
 	}
-	});
+});
 
 // Set up a headless websocket server for our Audio Connector
 const wsServer = new ws.Server({ noServer: true });
+console.log("start ws")
 wsServer.getUniqueID = function () {
     function s4() {
         return Math.floor((1 + Math.random()) * 0x10000).toString(16).substring(1);
-    }
+    }		
     return s4() + s4() + '-' + s4();
 };
+
+const speak_to_ws = async (ws, text) => {
+  // STEP 2: Make a request and configure the request with options (such as model choice, audio configuration, etc.)
+  const response = await deepgram.speak.request(
+    { text },
+    {
+      model: "aura-2-thalia-en",
+      encoding: "linear16",
+      container: "wav",
+			sample_rate: 16000,
+    }
+  );
+  // STEP 3: Get the audio stream and headers from the response
+  const stream = await response.getStream();
+  const headers = await response.getHeaders();
+  if (stream) {
+    // STEP 4: Convert the stream to an audio buffer
+    const buffer = await getAudioBuffer(stream);
+    // STEP 5: Write the audio buffer to a file
+		for(i=0; i<= buffer.length; i+=640){
+			ws.send(buffer.subarray(i,i+640))
+		}
+		
+    fs.writeFile("output.wav", buffer, (err) => {
+      if (err) {
+        console.error("Error writing audio to file:", err);
+      } else {
+        console.log("Audio file written to output.wav");
+      }
+    });
+  } else {
+    console.error("Error generating audio:", stream);
+  }
+  if (headers) {
+    console.log("Headers:", headers);
+  }
+};
+// helper function to convert stream to audio buffer
+const getAudioBuffer = async (response) => {
+  const reader = response.getReader();
+  const chunks = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+  }
+  const dataArray = chunks.reduce(
+    (acc, chunk) => Uint8Array.from([...acc, ...chunk]),
+    new Uint8Array(0)
+  );
+  return Buffer.from(dataArray.buffer);
+};
+
+
 
 wsServer.on('connection', websocket => {
 	//assign an id to this client
@@ -138,12 +226,13 @@ wsServer.on('connection', websocket => {
 			//console.log(data)
 			//change the ID to the current sessionID
 			websocket.id =JSON.parse(data)['sessionid'];
+			//Multilingual (English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, and Dutch): multi
 
 			dgConnection = deepgram.listen.live({
 				punctuate: true,
 				interim_results: false,
-				language: "en-US",
-				model: "nova",
+				language: "multi",
+				model: "nova-3",
 				encoding: "linear16",
 				sample_rate: 16000,
 				channel: 2,
@@ -151,17 +240,15 @@ wsServer.on('connection', websocket => {
 			});
 
 			dgConnection.on(LiveTranscriptionEvents.Open, () => {
-				console.log("CONN OPEN")
-				dgConnection.on(LiveTranscriptionEvents.Transcript, (data) => {
+				console.log("DEEPGRAM CONN OPEN")
+				dgConnection.on(LiveTranscriptionEvents.Transcript, async (data) => {
 					// Write only the transcript to the console
 					try {
 						transcript=data.channel.alternatives[0].transcript, { depth: null };
-						
-						console.log("Transcript Content is: ",transcript);
-						if(transcript!='' && transcript != ' '){
+						if(transcript!='' && transcript != ' ' && data.is_final){
 							words = data.channel.alternatives[0].words
 							message_to_send = {}
-				
+							
 							words.forEach(function each(word) {
 								if(word.speaker in message_to_send){
 									message_to_send[word.speaker]+=" "+word.punctuated_word
@@ -170,7 +257,16 @@ wsServer.on('connection', websocket => {
 								}
 								
 							});
-							console.log("Messafge: ",message_to_send)
+							for (const [key, value] of Object.entries(message_to_send)) {
+								console.log(key, value);								
+								const res = await translate(value, { to: 'en'});
+								message_to_send[key] = res.text
+								console.log("Original text language", res.from.language.iso); 
+								console.log("Translated text", res.text);				
+								//if original is english, no need to play it back			
+								if(!res.from.language.iso.includes("en")) speak_to_ws(websocket, res.text)
+							}
+							console.log("Message: ",message_to_send)
 							to_send = {
 								"sessionid":websocket.id,
 								"messages":message_to_send
@@ -205,7 +301,7 @@ wsServer.on('connection', websocket => {
 			console.log("client_id is: ", id)
 		}
 		else if (data.toString().includes("close_audio_connector")){
-			console.log(data)
+			console.log("Closing", data)
 			var session_id = JSON.parse(data)['sessionid']
 			
 			wsServer.clients.forEach(function each(client) {
