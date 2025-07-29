@@ -1,6 +1,7 @@
-# **One way Audio connector Sample**
+# **Two way Audio connector Sample**
 
-This Application is a workaround for a bug in MacOS where our browser SDK cannot detect connection or disconnection for participants with intermittent network. 
+This demo uses bi directional Audio Connector to playback translations from English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, and Dutch into English. It also displays diarize transcriptions. Uses Deepgram and Google Translate
+
 
 # **Deployment Guide**
 
