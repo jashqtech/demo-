@@ -1,12 +1,10 @@
 require('dotenv').config();
-var request = require('request');
 var express = require('express');
 var cors = require('cors');
 var path = require('path');
 var cookieParser = require('cookie-parser');
 var logger = require('morgan');
 var app = express();
-var mailer = require('nodemailer');
 var crypto = require('crypto');
 const { Auth } = require('@vonage/auth');
 const { Video } = require('@vonage/video');
@@ -21,7 +19,6 @@ app.use(cookieParser());
 app.use('/', express.static(path.join(__dirname, 'views')));
 const fetch = require("cross-fetch");
 const translate = require('google-translate-api-x');
-const fs = require("fs");
 const { createClient,LiveTranscriptionEvents } = require("@deepgram/sdk");
 const { Vonage } = require('@vonage/server-sdk');
 // - or -
@@ -105,35 +102,6 @@ app.get('/:sessionId/audioconnect', async function (req, res) {
 	console.log("Audio connect")
 	token = videoClient.generateClientToken(sessionId);
 	
-	// var options = {
-	// 	'method': 'POST',
-	// 	'url': `https://video.api.vonage.com/v2/project/${appId}/connect`,
-	// 	'headers': {
-	// 		'Content-Type': 'application/json',
-	// 		'Authorization': `Bearer ${token}`
-	// 	},
-	// 	body: JSON.stringify({
-	// 		"sessionId": sessionId,
-	// 		"token": token,
-	// 		"websocket": {
-	// 			"uri": socketUriForStream,
-	// 			"headers": {
-	// 				"sessionid": sessionId
-	// 			},
-	// 			"audioRate": 8000,
-	// 			"bidirectional": false
-	// 		}
-	// 	})
-	
-	// };
-	// await request(options, function (error, response) {
-	// 	if (error){
-	// 		console.log('Error:', error.message);
-	// 		return res.json({success:false,message:"Audio Connector failed to connect to socket"}, 401);			
-	// 	} 
-	// 	console.log('Audio Socket websocket connected', response.body);
-	//   return res.json({success:true,message:"Audio Connecter connected to socket"}, 200);
-	// });
 	
 	result = await videoClient.connectToWebsocket(req.params['sessionId'], token, {"uri":socketUriForStream, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
 	console.log("AC::", result)
@@ -158,7 +126,7 @@ wsServer.getUniqueID = function () {
 };
 
 const speak_to_ws = async (ws, text) => {
-  // STEP 2: Make a request and configure the request with options (such as model choice, audio configuration, etc.)
+  // Make a request and configure the request with options (such as model choice, audio configuration, etc.)
   const response = await deepgram.speak.request(
     { text },
     {
@@ -168,24 +136,17 @@ const speak_to_ws = async (ws, text) => {
 			sample_rate: 16000,
     }
   );
-  // STEP 3: Get the audio stream and headers from the response
+  // Get the audio stream and headers from the response
   const stream = await response.getStream();
   const headers = await response.getHeaders();
   if (stream) {
-    // STEP 4: Convert the stream to an audio buffer
+    // Convert the stream to an audio buffer
     const buffer = await getAudioBuffer(stream);
-    // STEP 5: Write the audio buffer to a file
+    //Write the audio buffer to a filwebsocket
 		for(i=0; i<= buffer.length; i+=640){
 			ws.send(buffer.subarray(i,i+640))
 		}
-		
-    fs.writeFile("output.wav", buffer, (err) => {
-      if (err) {
-        console.error("Error writing audio to file:", err);
-      } else {
-        console.log("Audio file written to output.wav");
-      }
-    });
+
   } else {
     console.error("Error generating audio:", stream);
   }
