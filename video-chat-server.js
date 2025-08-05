@@ -9,7 +9,6 @@ var crypto = require('crypto');
 const { Auth } = require('@vonage/auth');
 const { Video } = require('@vonage/video');
 const ws = require('ws');
-const socketUriForStream = "wss://video.urzo.online"
 app.set('view engine', 'ejs'); 
 app.use(logger('dev'));
 app.use(cors());
@@ -103,7 +102,7 @@ app.get('/:sessionId/audioconnect', async function (req, res) {
 	token = videoClient.generateClientToken(sessionId);
 	
 	
-	result = await videoClient.connectToWebsocket(req.params['sessionId'], token, {"uri":socketUriForStream, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
+	result = await videoClient.connectToWebsocket(req.params['sessionId'], token, {"uri":websocket_server_uri, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
 	console.log("AC::", result)
 	if (result.connectionId!=null) {
 		console.log('Audio Socket websocket connected');
@@ -125,35 +124,6 @@ wsServer.getUniqueID = function () {
     return s4() + s4() + '-' + s4();
 };
 
-const speak_to_ws = async (ws, text) => {
-  // Make a request and configure the request with options (such as model choice, audio configuration, etc.)
-  const response = await deepgram.speak.request(
-    { text },
-    {
-      model: "aura-2-thalia-en",
-      encoding: "linear16",
-      container: "wav",
-			sample_rate: 16000,
-    }
-  );
-  // Get the audio stream and headers from the response
-  const stream = await response.getStream();
-  const headers = await response.getHeaders();
-  if (stream) {
-    // Convert the stream to an audio buffer
-    const buffer = await getAudioBuffer(stream);
-    //Write the audio buffer to a filwebsocket
-		for(i=0; i<= buffer.length; i+=640){
-			ws.send(buffer.subarray(i,i+640))
-		}
-
-  } else {
-    console.error("Error generating audio:", stream);
-  }
-  if (headers) {
-    console.log("Headers:", headers);
-  }
-};
 // helper function to convert stream to audio buffer
 const getAudioBuffer = async (response) => {
   const reader = response.getReader();
@@ -168,6 +138,22 @@ const getAudioBuffer = async (response) => {
     new Uint8Array(0)
   );
   return Buffer.from(dataArray.buffer);
+};
+
+const playback_to_websocket = async (ws, stream) => {  
+  if (stream) {
+    // Convert the stream to an audio buffer
+    var buffer = await getAudioBuffer(stream);
+		//remove the WAV header (first 44 bytes)
+		buffer = buffer.subarray(44,buffer.length)
+		console.log("Buffer", buffer)
+    //Write the audio buffer to a filwebsocket
+		for(i=0; i<= buffer.length; i+=640){
+			ws.send(buffer.subarray(i,i+640))
+		}
+  } else {
+    console.error("Error generating audio:", stream);
+  }
 };
 
 
@@ -223,9 +209,24 @@ wsServer.on('connection', websocket => {
 								const res = await translate(value, { to: 'en'});
 								message_to_send[key] = res.text
 								console.log("Original text language", res.from.language.iso); 
-								console.log("Translated text", res.text);				
+								console.log("Translated text", res.text);
+								const text = res.text
 								//if original is english, no need to play it back			
-								if(!res.from.language.iso.includes("en")) speak_to_ws(websocket, res.text)
+								if(!res.from.language.iso.includes("en")) {
+									// Make a request and configure the request with options (such as model choice, audio configuration, etc.)
+									const response = await deepgram.speak.request(
+										{ text },
+										{
+											model: "aura-2-thalia-en",
+											encoding: "linear16",
+											container: "wav",
+											sample_rate: 16000,
+										}
+									);
+									// Get the audio stream and headers from the response
+									const stream = await response.getStream();
+									playback_to_websocket(websocket, stream)
+								}
 							}
 							console.log("Message: ",message_to_send)
 							to_send = {
