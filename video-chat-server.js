@@ -9,6 +9,7 @@ var crypto = require('crypto');
 const { Auth } = require('@vonage/auth');
 const { Video } = require('@vonage/video');
 const ws = require('ws');
+const fs = require('fs');
 app.set('view engine', 'ejs'); 
 app.use(logger('dev'));
 app.use(cors());
@@ -30,7 +31,7 @@ const port = process.env.PORT;
 const websocket_server_uri = process.env.WEBSOCKET_SERVER_URI
 const credentials = new Auth({
 	applicationId: appId,
-	privateKey: "private.key",
+	privateKey:  fs.readFileSync(path.join(__dirname, "private.key")),
 });
 
 const options = {};
@@ -100,9 +101,9 @@ app.get('/:sessionId/streams', async function (req, res) {
 app.get('/:sessionId/audioconnect', async function (req, res) {
 	console.log("Audio connect")
 	token = videoClient.generateClientToken(sessionId);
-	
-	
-	result = await videoClient.connectToWebsocket(req.params['sessionId'], token, {"uri":websocket_server_uri, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
+	 const sessionId = req.params['sessionId']; 
+		console.log('seession id ',sessionId)
+	result = await videoClient.connectToWebsocket(sessionId, token, {"uri":websocket_server_uri, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
 	console.log("AC::", result)
 	if (result.connectionId!=null) {
 		console.log('Audio Socket websocket connected');
