@@ -100,8 +100,8 @@ app.get('/:sessionId/streams', async function (req, res) {
 //Start an Audio Connector Session
 app.get('/:sessionId/audioconnect', async function (req, res) {
 	console.log("Audio connect")
-	token = videoClient.generateClientToken(sessionId);
-	 const sessionId = req.params['sessionId']; 
+  const sessionId = req.params.sessionId;   
+    const token = videoClient.generateClientToken(sessionId);
 		console.log('seession id ',sessionId)
 	result = await videoClient.connectToWebsocket(sessionId, token, {"uri":websocket_server_uri, "headers": {"sessionid": req.params['sessionId']}, "audioRate":16000, "bidirectional":true})
 	console.log("AC::", result)
