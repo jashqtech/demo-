@@ -31,7 +31,9 @@
     "websocket": "^1.0.35"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node video-chat-server.js",
+  "test": "echo \"No tests specified\" && exit 0"
+
   },
   "keywords": [],
   "author": "",
