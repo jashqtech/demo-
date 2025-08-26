@@ -181,17 +181,20 @@ dgConnection = deepgram.listen.live({
     punctuate: true,
     interim_results: true, // Enable interim results to get partial transcriptions
     language: "multi",
-    model: "nova-2", // Consider using nova-2 for better accuracy with longer segments
+    model: "nova-3", // Using nova-3 with optimized settings for long sentences
     encoding: "linear16",
     sample_rate: 16000,
-    channel: 2,
+    channels: 2, // Note: use 'channels' instead of 'channel' for nova-3
     diarize: true,
-    // Add these parameters for better long sentence handling
-    endpointing: 300, // Wait 300ms before considering speech ended
-    utterance_end_ms: 1000, // Wait 1000ms before finalizing an utterance
-    vad_turnoff: 1000, // Voice activity detection timeout
+    // Nova-3 optimized parameters for long sentence handling
+    endpointing: 500, // Increased for nova-3 - wait 500ms before considering speech ended
+    utterance_end_ms: 1500, // Increased for nova-3 - wait 1.5s before finalizing
+    vad_turnoff: 1500, // Voice activity detection timeout for longer pauses
     filler_words: true, // Handle filler words better
-    numerals: true // Better number recognition
+    numerals: true, // Better number recognition
+    profanity_filter: false, // Disable if causing issues with transcription
+    redact: false, // Disable redaction for better accuracy
+    smart_format: true // Enable smart formatting for nova-3
 });
 
 // Modified transcript handling with better logic for long sentences
@@ -313,7 +316,7 @@ setInterval(() => {
         console.log("Deepgram connection state:", dgConnection.getReadyState());
     }
 }, 30000); // Check every 30 seconds
-			
+
 		
 			console.log("session_id is: ", websocket.id)
 		}
