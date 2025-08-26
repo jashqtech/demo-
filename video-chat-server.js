@@ -176,84 +176,144 @@ wsServer.on('connection', websocket => {
 			websocket.id =JSON.parse(data)['sessionid'];
 			//Multilingual (English, Spanish, French, German, Hindi, Russian, Portuguese, Japanese, Italian, and Dutch): multi
 
-			dgConnection = deepgram.listen.live({
-				punctuate: true,
-				interim_results: false,
-				language: "multi",
-				model: "nova-3",
-				encoding: "linear16",
-				sample_rate: 16000,
-				channel: 2,
-				diarize: true
-			});
+		// Improved Deepgram configuration for better long sentence recognition
+dgConnection = deepgram.listen.live({
+    punctuate: true,
+    interim_results: true, // Enable interim results to get partial transcriptions
+    language: "multi",
+    model: "nova-2", // Consider using nova-2 for better accuracy with longer segments
+    encoding: "linear16",
+    sample_rate: 16000,
+    channel: 2,
+    diarize: true,
+    // Add these parameters for better long sentence handling
+    endpointing: 300, // Wait 300ms before considering speech ended
+    utterance_end_ms: 1000, // Wait 1000ms before finalizing an utterance
+    vad_turnoff: 1000, // Voice activity detection timeout
+    filler_words: true, // Handle filler words better
+    numerals: true // Better number recognition
+});
 
-			dgConnection.on(LiveTranscriptionEvents.Open, () => {
-				console.log("DEEPGRAM CONN OPEN")
-				dgConnection.on(LiveTranscriptionEvents.Transcript, async (data) => {
-					// Write only the transcript to the console
-					try {
-						transcript=data.channel.alternatives[0].transcript, { depth: null };
-						if(transcript!='' && transcript != ' ' && data.is_final){
-							words = data.channel.alternatives[0].words
-							message_to_send = {}
-							
-							words.forEach(function each(word) {
-								if(word.speaker in message_to_send){
-									message_to_send[word.speaker]+=" "+word.punctuated_word
-								}else{
-									message_to_send[word.speaker]=word.punctuated_word
-								}
-								
-							});
-							for (const [key, value] of Object.entries(message_to_send)) {
-								console.log(key, value);								
-								const res = await translate(value, { to: 'en'});
-								message_to_send[key] = res.text
-								console.log("Original text language", res.from.language.iso); 
-								console.log("Translated text", res.text);
-								const text = res.text
-								//if original is english, no need to play it back			
-								if(!res.from.language.iso.includes("en")) {
-									// Make a request and configure the request with options (such as model choice, audio configuration, etc.)
-									const response = await deepgram.speak.request(
-										{ text },
-										{
-											model: "aura-2-thalia-en",
-											encoding: "linear16",
-											container: "wav",
-											sample_rate: 16000,
-										}
-									);
-									// Get the audio stream and headers from the response
-									const stream = await response.getStream();
-									playback_to_websocket(websocket, stream)
-								}
-							}
-							console.log("Message: ",message_to_send)
-							to_send = {
-								"sessionid":websocket.id,
-								"messages":message_to_send
-							}
-							wsServer.clients.forEach(function each(client) {
-								if(client.id === "client_"+websocket.id){
-									client.send(JSON.stringify(to_send))
-								}
-							});
-						}
-						
-					} catch (error) {
-						console.log("no data", error);
-					}
-				});
-				dgConnection.on(LiveTranscriptionEvents.Close, (close) => {
-					console.log("Connection closed.", close);
-					dgConnection.requestClose();
-				});
-				dgConnection.on(LiveTranscriptionEvents.Error, (error) => {
-					console.log("Error.", error);
-					dgConnection.requestClose();
-				});
-			});
+// Modified transcript handling with better logic for long sentences
+dgConnection.on(LiveTranscriptionEvents.Transcript, async (data) => {
+    try {
+        const transcript = data.channel.alternatives[0].transcript;
+        
+        // Handle both interim and final results
+        if (transcript && transcript.trim() !== '') {
+            console.log(`${data.is_final ? 'FINAL' : 'INTERIM'}: ${transcript}`);
+            
+            // Only process final results for translation and playback
+            if (data.is_final) {
+                const words = data.channel.alternatives[0].words;
+                let message_to_send = {};
+                
+                // Group words by speaker
+                words.forEach(function(word) {
+                    const speaker = word.speaker || 0; // Default to speaker 0 if undefined
+                    if (speaker in message_to_send) {
+                        message_to_send[speaker] += " " + word.punctuated_word;
+                    } else {
+                        message_to_send[speaker] = word.punctuated_word;
+                    }
+                });
+                
+                // Process each speaker's complete message
+                for (const [speaker, text] of Object.entries(message_to_send)) {
+                    console.log(`Speaker ${speaker}: ${text}`);
+                    
+                    try {
+                        const res = await translate(text, { to: 'en' });
+                        message_to_send[speaker] = res.text;
+                        console.log("Original text language:", res.from.language.iso);
+                        console.log("Translated text:", res.text);
+                        
+                        // Only generate speech if not originally in English
+                        if (!res.from.language.iso.includes("en")) {
+                            const response = await deepgram.speak.request(
+                                { text: res.text },
+                                {
+                                    model: "aura-2-thalia-en",
+                                    encoding: "linear16",
+                                    container: "wav",
+                                    sample_rate: 16000,
+                                }
+                            );
+                            
+                            const stream = await response.getStream();
+                            await playback_to_websocket(websocket, stream);
+                        }
+                    } catch (translationError) {
+                        console.error("Translation error:", translationError);
+                        // Keep original text if translation fails
+                    }
+                }
+                
+                console.log("Complete message:", message_to_send);
+                
+                // Send to clients
+                const to_send = {
+                    "sessionid": websocket.id,
+                    "messages": message_to_send
+                };
+                
+                wsServer.clients.forEach(function(client) {
+                    if (client.id === "client_" + websocket.id) {
+                        client.send(JSON.stringify(to_send));
+                    }
+                });
+            }
+        }
+    } catch (error) {
+        console.error("Transcript processing error:", error);
+    }
+});
+
+// Improved audio buffer playback with better chunking
+const playback_to_websocket = async (ws, stream) => {
+    try {
+        if (stream) {
+            const buffer = await getAudioBuffer(stream);
+            // Remove the WAV header (first 44 bytes)
+            const audioData = buffer.subarray(44);
+            console.log("Audio buffer size:", audioData.length);
+            
+            // Send in smaller, more frequent chunks for better real-time performance
+            const chunkSize = 320; // Smaller chunks for better streaming
+            for (let i = 0; i < audioData.length; i += chunkSize) {
+                const chunk = audioData.subarray(i, Math.min(i + chunkSize, audioData.length));
+                if (ws.readyState === ws.OPEN) {
+                    ws.send(chunk);
+                    // Small delay between chunks to prevent overwhelming the connection
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+            }
+        }
+    } catch (error) {
+        console.error("Audio playback error:", error);
+    }
+};
+
+// Add connection health monitoring
+dgConnection.on(LiveTranscriptionEvents.Open, () => {
+    console.log("DEEPGRAM CONNECTION OPENED");
+});
+
+dgConnection.on(LiveTranscriptionEvents.Close, (close) => {
+    console.log("Deepgram connection closed:", close);
+});
+
+dgConnection.on(LiveTranscriptionEvents.Error, (error) => {
+    console.error("Deepgram connection error:", error);
+});
+
+// Add periodic connection health check
+setInterval(() => {
+    if (dgConnection && dgConnection.getReadyState() !== 1) {
+        console.log("Deepgram connection state:", dgConnection.getReadyState());
+    }
+}, 30000); // Check every 30 seconds
+			
 		
 			console.log("session_id is: ", websocket.id)
 		}
