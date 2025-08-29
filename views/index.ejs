@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="/css/style.css" />
+  <script src="/opentok-build-3.js"></script>
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+</head>
+<body>
+  <div class="title" style="padding: 10px; background-color: white; height: 230px;">
+    Share this link for people to join<br />
+    <input type="text" style="margin: 10px; width: calc(100% - 500px);" id="link" value="Starting Session" readonly />
+    <button onclick="copyLink('link')">Copy Link</button><br /><br />
+    Use this link to create tokens<br />
+    <input type="text" style="margin: 10px; width: calc(100% - 500px);" id="token" value="Starting Session" readonly />
+    <button onclick="copyLink('token')">Copy Link</button><br /><br />
+    <span>
+      <button id="deepgram_button" style="color: white; padding: 5px; background-color: darkslategrey;" onclick="toggleDeepgram()">
+        Start Deepgram
+      </button>
+    </span>
+  </div>
+
+  <div>
+    <div id="subscriber"></div>
+    <div id="publisher"></div>
+  </div>
+
+  <div id="transcription" style="height: 60px; overflow: auto; bottom: 0; position: absolute; width: 100%; background: seashell; padding: 10px; border-width: medium; border-color: black;">
+    <div id="deepgram">Transcription Log:<br></div>
+  </div>
+
+  <script src="/js/client.js" type="module"></script>
+  <script>
+    let deepgram_in_use = false;
+    let audioQueue = [];
+    let isPlaying = false;
+
+    $(document).ready(function () {
+      console.log(`[${new Date().toISOString()}] Document ready, transcription div initialized`);
+    });
+
+    const ws = new WebSocket("<%=websocket_server_uri%>");
+    ws.onopen = () => {
+      console.log(`[${new Date().toISOString()}] WebSocket connection opened`);
+      ws.send(JSON.stringify({ command: 'set_id', id: 'client_<%=sessionId%>' }));
+      console.log(`[${new Date().toISOString()}] Sent client ID: client_<%=sessionId%>`);
+    };
+
+    $(async () => {
+      console.log(`[${new Date().toISOString()}] Starting session: <%=sessionId%>`);
+      const result = await startSession('<%=sessionId%>', '<%=token%>', '<%=appId%>');
+      $('#link').val(`${window.location.protocol}//${window.location.hostname}/<%=sessionId%>/join`);
+      $('#token').val(`${window.location.protocol}//${window.location.hostname}/<%=sessionId%>/token`);
+      console.log(`[${new Date().toISOString()}] Session started, links updated`);
+    });
+
+    function copyLink(id) {
+      const copyText = document.getElementById(id);
+      copyText.select();
+      copyText.setSelectionRange(0, 99999);
+      document.execCommand('copy');
+      console.log(`[${new Date().toISOString()}] Copied link: ${copyText.value}`);
+    }
+
+    function toggleDeepgram() {
+      const button = $('#deepgram_button');
+      if (!deepgram_in_use) {
+        console.log(`[${new Date().toISOString()}] Initiating Deepgram connection`);
+        button.text('Starting Deepgram').css('background-color', 'Orange');
+        $.ajax({
+          method: 'GET',
+          url: '/<%=sessionId%>/audioconnect',
+        }).done((msg) => {
+          deepgram_in_use = true;
+          console.log(`[${new Date().toISOString()}] Deepgram started successfully: ${JSON.stringify(msg)}`);
+          button.text('Stop Deepgram').css('background-color', 'darkgreen');
+        }).fail(() => {
+          console.error(`[${new Date().toISOString()}] Deepgram startup failed`);
+          alert('Deepgram startup failed');
+          button.text('Start Deepgram').css('background-color', 'darkslategrey');
+        });
+      } else {
+        console.log(`[${new Date().toISOString()}] Closing Deepgram connection`);
+        button.text('Start Deepgram').css('background-color', 'darkslategrey');
+        deepgram_in_use = false;
+        ws.send(JSON.stringify({ command: 'close_audio_connector', sessionid: '<%=sessionId%>' }));
+        console.log(`[${new Date().toISOString()}] Sent close audio connector command`);
+      }
+    }
+
+    // Function to play audio chunks
+    function playAudioChunk(data) {
+      const blob = new Blob([data], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioQueue.push(audio);
+      playNextAudio();
+    }
+
+    function playNextAudio() {
+      if (isPlaying || audioQueue.length === 0) return;
+      isPlaying = true;
+      const audio = audioQueue.shift();
+      audio.play().then(() => {
+        audio.onended = () => {
+          URL.revokeObjectURL(audio.src);
+          isPlaying = false;
+          playNextAudio();
+        };
+      }).catch((err) => {
+        console.error('Audio playback error:', err);
+        isPlaying = false;
+        playNextAudio();
+      });
+    }
+
+    let lastUpdate = 0;
+    const updateInterval = 100; // Debounce DOM updates (ms)
+
+    ws.onmessage = (evt) => {
+      const startTime = Date.now();
+      console.log(`[${new Date().toISOString()}] WebSocket message received`);
+      try {
+        if (evt.data instanceof Blob) {
+          playAudioChunk(evt.data);
+          return;
+        }
+        const data = JSON.parse(evt.data);
+        if (data.sessionid === '<%=sessionId%>') {
+          const now = Date.now();
+          if (now - lastUpdate < updateInterval) return; // Debounce
+          lastUpdate = now;
+
+          $('#deepgram .interim').remove();
+          for (const [key, value] of Object.entries(data.messages)) {
+            console.log(`[${new Date().toISOString()}] Final for Speaker ${key}: ${value}`);
+            $('#deepgram').append(`<div>Speaker ${key} -> ${new Date().toLocaleTimeString()} : ${value}</div>`);
+          }
+          $('#transcription').animate({ scrollTop: $('#transcription').prop('scrollHeight') }, 100);
+          console.log(`[${new Date().toISOString()}] Transcription displayed in ${(Date.now() - startTime) / 1000} seconds`);
+        }
+      } catch (error) {
+        console.error(`[${new Date().toISOString()}] WebSocket message error:`, error);
+      }
+    };
+  </script>
+</body>
+</html>
