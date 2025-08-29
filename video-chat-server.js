@@ -125,35 +125,37 @@ wsServer.getUniqueID = function () {
     return s4() + s4() + '-' + s4();
 };
 
-// helper function to convert stream to audio buffer
-const getAudioBuffer = async (response) => {
-  const reader = response.getReader();
-  const chunks = [];
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  const dataArray = chunks.reduce(
-    (acc, chunk) => Uint8Array.from([...acc, ...chunk]),
-    new Uint8Array(0)
-  );
-  return Buffer.from(dataArray.buffer);
-};
-
+// helper function to stream audio chunks to websocket, skipping WAV header
 const playback_to_websocket = async (ws, stream) => {  
   if (stream) {
-    // Convert the stream to an audio buffer
-    var buffer = await getAudioBuffer(stream);
-		//remove the WAV header (first 44 bytes)
-		buffer = buffer.subarray(44,buffer.length)
-		console.log("Buffer", buffer)
-    //Write the audio buffer to a filwebsocket
-		for(i=0; i<= buffer.length; i+=640){
-			ws.send(buffer.subarray(i,i+640))
-		}
+    const reader = stream.getReader();
+    let headerSkipped = false;
+    let bytesSkipped = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      let audioData = value;
+
+      if (!headerSkipped) {
+        if (bytesSkipped + value.length >= 44) {
+          const skipInThis = 44 - bytesSkipped;
+          audioData = value.subarray(skipInThis);
+          headerSkipped = true;
+        } else {
+          bytesSkipped += value.length;
+          continue;
+        }
+      }
+
+      // Send in 640-byte chunks
+      for (let i = 0; i < audioData.length; i += 640) {
+        ws.send(audioData.subarray(i, i + 640));
+      }
+    }
   } else {
-    console.error("Error generating audio:", stream);
+    console.error("Error generating audio stream");
   }
 };
 
@@ -205,30 +207,20 @@ wsServer.on('connection', websocket => {
 								}
 								
 							});
-							for (const [key, value] of Object.entries(message_to_send)) {
-								console.log(key, value);								
-								const res = await translate(value, { to: 'en'});
-								message_to_send[key] = res.text
-								console.log("Original text language", res.from.language.iso); 
-								console.log("Translated text", res.text);
-								const text = res.text
-								//if original is english, no need to play it back			
-								if(!res.from.language.iso.includes("en")) {
-									// Make a request and configure the request with options (such as model choice, audio configuration, etc.)
-									const response = await deepgram.speak.request(
-										{ text },
-										{
-											model: "aura-2-thalia-en",
-											encoding: "linear16",
-											container: "wav",
-											sample_rate: 16000,
-										}
-									);
-									// Get the audio stream and headers from the response
-									const stream = await response.getStream();
-									playback_to_websocket(websocket, stream)
-								}
-							}
+
+							// Parallelize translations
+							const translatePromises = Object.entries(message_to_send).map(async ([key, value]) => {
+								const res = await translate(value, { to: 'en' });
+								const translated = res.text;
+								const originalLang = res.from.language.iso;
+								message_to_send[key] = translated;
+								console.log("Original text language", originalLang); 
+								console.log("Translated text", translated);
+								return { key, translated, originalLang };
+							});
+
+							const processed = await Promise.all(translatePromises);
+
 							console.log("Message: ",message_to_send)
 							to_send = {
 								"sessionid":websocket.id,
@@ -239,6 +231,25 @@ wsServer.on('connection', websocket => {
 									client.send(JSON.stringify(to_send))
 								}
 							});
+
+							// Sequentially handle TTS for non-English originals
+							for (const item of processed) {
+								if (!item.originalLang.includes("en")) {
+									// Make a request and configure the request with options (such as model choice, audio configuration, etc.)
+									const response = await deepgram.speak.request(
+										{ text: item.translated },
+										{
+											model: "aura-2-thalia-en",
+											encoding: "linear16",
+											container: "wav",
+											sample_rate: 16000,
+										}
+									);
+									// Get the audio stream and headers from the response
+									const stream = await response.getStream();
+									await playback_to_websocket(websocket, stream);
+								}
+							}
 						}
 						
 					} catch (error) {
@@ -295,7 +306,7 @@ wsServer.on('connection', websocket => {
 	  });
 	  
 });
-
+//new code 
 const server = app.listen(port);
 server.on('upgrade', (request, socket, head) => {
   wsServer.handleUpgrade(request, socket, head, socket => {
