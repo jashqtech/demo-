@@ -164,6 +164,7 @@ const playback_to_websocket = async (ws, stream) => {
     }
   } else {
     console.error("Error generating audio stream");
+    console.error("Error generating audio stream");
   }
 };
 
@@ -303,7 +304,7 @@ wsServer.on('connection', websocket => {
 	  });
 	  
 });
-
+//new code 
 const server = app.listen(port);
 server.on('upgrade', (request, socket, head) => {
   wsServer.handleUpgrade(request, socket, head, socket => {
