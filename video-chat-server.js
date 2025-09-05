@@ -154,7 +154,8 @@ wsServer.on('connection', websocket => {
 			
 			const configPayload = {
 				config: {
-				  audio_language_code: "hi-IN",
+				  // audio_language_code: "hi-IN",
+				  audio_language_code: "es-ES",
 				  target_languages_codes: ["en-US"],
 				  audio_encoding: "LINEAR_16_PCM",
 				  voice: {
