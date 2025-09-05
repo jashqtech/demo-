@@ -295,3 +295,271 @@ server.on('upgrade', (request, socket, head) => {
     wsServer.emit('connection', socket, request);
   });
 });
+
+
+==============================================
+
+
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" href="/css/style.css" />
+		<script src="/opentok-build-3.js"></script>
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+	</head>
+	<body>
+		<div class="title" style="padding: 10px; background-color: white; height: 230px;">
+			Share this link for people to join<br /><input
+				type="text"
+				style="margin: 10px; width: calc(100% - 500px);"
+				id="link"
+				value="Starting Session"
+				readonly
+			/>
+			<button onclick="copyLink('link')">Copy Link</button><br /><br />
+
+			Use this link to create tokens<br /><input
+				type="text"
+				style="margin: 10px; width: calc(100% - 500px);"
+				id="token"
+				value="Starting Session"
+				readonly
+			/>
+			<button onclick="copyLink('token')">Copy Link</button><br /><br />
+			<br /><br />
+
+			<span>
+				<button
+					id="stenomatic_button"
+					style="color: white; padding: 5px; background-color: darkslategrey;"
+					onclick="toggleStenomatic()">
+					Start Translation</button>
+			</span>
+		</div>
+
+		<div>
+			<div id="subscriber"></div>
+			<div id="publisher"></div>
+		</div>
+		
+		<div id="transcription" style="
+				height: 60px;
+				overflow: scroll;
+				bottom: 0;
+				position: absolute;
+				width: 100%;
+				background: seashell;
+				padding: 10px;
+				border-width: medium;
+				border-color: black;
+			">
+			<div id="stenomatic">
+				<div>Transcription Log:<br></div>
+			</div>
+		</div>
+
+		<script src="/js/client.js" type="module"></script>
+	</body>
+</html>
+<script>
+    var stenomatic_in_use = false;
+    $(document).ready(function() {
+        msg_div = document.getElementById("transcription");
+        console.log(`[${new Date().toISOString()}] Document ready, transcription div initialized`);
+    });
+
+    var ws = new WebSocket("<%=websocket_server_uri%>");
+    ws.onopen = (event) => {
+        console.log(`[${new Date().toISOString()}] WebSocket connection opened`);
+        var msg = {
+            command: "set_id",
+            id: "client_<%=sessionId%>"
+        };
+        ws.send(JSON.stringify(msg));
+        console.log(`[${new Date().toISOString()}] Sent client ID: client_<%=sessionId%>`);
+    }
+
+    $(async function () {
+        console.log(`[${new Date().toISOString()}] Starting session: <%=sessionId%>`);
+        startSession('<%=sessionId%>', '<%=token%>', '<%=appId%>').then(function (result) {
+            $('#link').val(window.location.protocol + "//" + window.location.hostname + '/<%=sessionId%>/join');
+            $('#token').val(window.location.protocol + "//" + window.location.hostname + '/<%=sessionId%>/token');
+            console.log(`[${new Date().toISOString()}] Session started, links updated`);
+        });
+    });
+
+    function copyLink(id) {
+        var copyText = document.getElementById(id);
+        copyText.select();
+        copyText.setSelectionRange(0, 99999);
+        document.execCommand('copy');
+        console.log(`[${new Date().toISOString()}] Copied link: ${copyText.value}`);
+    }
+
+    function toggleStenomatic() {
+        var button = $('#stenomatic_button');
+        if (stenomatic_in_use == false) {
+            console.log(`[${new Date().toISOString()}] Initiating Stenomatic connection`);
+            button.text('Starting Translation');
+            button.css('background-color', 'Orange');
+            $.ajax({
+                method: 'GET',
+                url: '/<%=sessionId%>/audioconnect',
+            }).done(function (msg) {
+                stenomatic_in_use = true;
+                console.log(`[${new Date().toISOString()}] Translation started successfully: ${JSON.stringify(msg)}`);
+                button.text('Stop Translation');
+                button.css('background-color', 'darkgreen');
+            }).fail(function () {
+                console.log(`[${new Date().toISOString()}] Translation startup failed`);
+                alert("Translation startup failed");
+                button.text('Start Translation');
+                button.css('background-color', 'darkslategrey');
+            });
+        } else {
+            console.log(`[${new Date().toISOString()}] Closing Stenomatic connection`);
+            var msg = {
+                command: "close_audio_connector",
+                sessionid: "<%=sessionId%>"
+            };
+            button.text('Start Translation');
+            button.css('background-color', 'darkslategrey');
+            stenomatic_in_use = false;
+            ws.send(JSON.stringify(msg));
+            console.log(`[${new Date().toISOString()}] Sent close audio connector command`);
+        }
+    }
+
+    ws.onmessage = function(evt) {
+        const startTime = Date.now();
+        console.log(`[${new Date().toISOString()}] WebSocket message received`);
+        try {
+            const data = JSON.parse(evt.data);
+            if (data.sessionid == "<%=sessionId%>") {
+                if (data.is_interim) {
+                    // Clear previous interim and show new one
+                    $("#stenomatic").find(".interim").remove();
+                    for (const [key, value] of Object.entries(data.messages)) {
+                        console.log(`[${new Date().toISOString()}] Interim for Speaker ${key}: ${value}`);
+                        $("#stenomatic").append(`<div class="interim">Speaker ${key} -> ${new Date().toLocaleTimeString()} : Transcribing... ${value}</div>`);
+                    }
+                } else {
+                    // Clear interim and show final
+                    $("#stenomatic").find(".interim").remove();
+                    for (const [key, value] of Object.entries(data.messages)) {
+                        console.log(`[${new Date().toISOString()}] Final for Speaker ${key}: ${value}`);
+                        $("#stenomatic").append(`<div>Speaker ${key} -> ${new Date().toLocaleTimeString()} : ${value}</div>`);
+                    }
+                }
+                $("#transcription").animate({ scrollTop: $('#transcription').prop("scrollHeight") }, 100);
+                console.log(`[${new Date().toISOString()}] Transcription displayed in ${(Date.now() - startTime) / 1000} seconds`);
+            }
+        } catch (error) {
+            console.log(`[${new Date().toISOString()}] WebSocket message error:`, error);
+        }
+    };
+</script>
+
+
+=========================================
+
+
+//create a session
+var apiKey = '';
+var sessionId = '';
+var token = '';
+var session = '';
+var stream_name = "video";
+
+
+//connect to a session
+window.startSession =(sessionId, token, apiKey) => {
+
+	const queryString = window.location.search;
+	console.log(queryString);
+	const urlParams = new URLSearchParams(queryString);
+	if(urlParams.has('stream_name')){
+		stream_name = urlParams.get('stream_name')
+	}
+
+	var deferred = new $.Deferred();
+
+	var publisher = OT.initPublisher("publisher", {
+		insertMode: 'append',
+		width: '100%',
+		height: '100%',
+		resolution: "640x480",
+		name: stream_name
+	});
+
+	publisher.on('videoInputDeviceChanged', (device) => {
+		console.log('video device', device);
+		console.log(`changing video device: ${device.label}`);
+		});
+
+	publisher.on('audioInputDeviceChanged', (device) => {
+		console.log('audio device', device);
+		console.log(`changing audio device: ${device.label}`);
+		});
+	
+
+	session = OT.initSession(apiKey, sessionId);
+	session.connect(token, async function (err) {
+		if (err) {
+			console.log(err);
+			deferred.resolve(false);
+		} else {
+
+			session.publish(publisher);
+			
+			deferred.resolve(true);
+			//subscribe to other's stream
+			session.on('streamCreated', function (event) {
+				console.log("Stream UP")
+				var subscriber = session.subscribe(event.stream, event.stream.name == "vonage_maxine"?"maxine":"subscriber", {
+					insertMode: 'append',
+					width: '100%',
+					height: '100%',
+					resolution: "640x480",
+				});
+				var subsid = subscriber.id
+				
+				if(event.stream.name == "vonage_maxine"){
+					subscriber.subscribeToAudio(maxine_muted?false:true)
+					maxine = subscriber;
+				}
+				if(String(event.stream.name).includes("mx_")){
+					console.log("MX ENABLED")
+					subscriber.subscribeToAudio(mx_users_muted?false:true)
+					mx_enabled[subscriber.id]=subscriber
+					console.log(mx_enabled)
+				}
+				subscriber.on("destroyed", function (event){
+					console.log("SUBS DESTROYED: ", event)
+					delete mx_enabled[subsid]
+					try {
+						if(maxine.id == null) {maxine = null}
+					} catch (error) {
+						//pass
+					}
+
+				})
+				
+
+				
+				console.log("mx list: ",mx_enabled)
+				console.log("maxine: ",maxine)
+
+			});
+			session.on('streamDestroyed', function (event) {
+				
+			});
+			
+		}
+	});
+	return deferred.promise();
+}
+try {
+} catch (e) {
+	console.log('No session yet');
+}  

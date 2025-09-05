@@ -28,10 +28,10 @@
 
 			<span>
 				<button
-					id="deepgram_button"
+					id="stenomatic_button"
 					style="color: white; padding: 5px; background-color: darkslategrey;"
-					onclick="toggleDeepgram()">
-					Start Deepgram</button>
+					onclick="toggleStenomatic()">
+					Start Translation</button>
 			</span>
 		</div>
 
@@ -51,7 +51,7 @@
 				border-width: medium;
 				border-color: black;
 			">
-			<div id="deepgram">
+			<div id="stenomatic">
 				<div>Transcription Log:<br></div>
 			</div>
 		</div>
@@ -60,7 +60,7 @@
 	</body>
 </html>
 <script>
-    var deepgram_in_use = false;
+    var stenomatic_in_use = false;
     $(document).ready(function() {
         msg_div = document.getElementById("transcription");
         console.log(`[${new Date().toISOString()}] Document ready, transcription div initialized`);
@@ -94,35 +94,35 @@
         console.log(`[${new Date().toISOString()}] Copied link: ${copyText.value}`);
     }
 
-    function toggleDeepgram() {
-        var button = $('#deepgram_button');
-        if (deepgram_in_use == false) {
-            console.log(`[${new Date().toISOString()}] Initiating Deepgram connection`);
-            button.text('Starting Deepgram');
+    function toggleStenomatic() {
+        var button = $('#stenomatic_button');
+        if (stenomatic_in_use == false) {
+            console.log(`[${new Date().toISOString()}] Initiating Stenomatic connection`);
+            button.text('Starting Translation');
             button.css('background-color', 'Orange');
             $.ajax({
                 method: 'GET',
                 url: '/<%=sessionId%>/audioconnect',
             }).done(function (msg) {
-                deepgram_in_use = true;
-                console.log(`[${new Date().toISOString()}] Deepgram started successfully: ${JSON.stringify(msg)}`);
-                button.text('Stop Deepgram');
+                stenomatic_in_use = true;
+                console.log(`[${new Date().toISOString()}] Translation started successfully: ${JSON.stringify(msg)}`);
+                button.text('Stop Translation');
                 button.css('background-color', 'darkgreen');
             }).fail(function () {
-                console.log(`[${new Date().toISOString()}] Deepgram startup failed`);
-                alert("Deepgram startup failed");
-                button.text('Start Deepgram');
+                console.log(`[${new Date().toISOString()}] Translation startup failed`);
+                alert("Translation startup failed");
+                button.text('Start Translation');
                 button.css('background-color', 'darkslategrey');
             });
         } else {
-            console.log(`[${new Date().toISOString()}] Closing Deepgram connection`);
+            console.log(`[${new Date().toISOString()}] Closing Stenomatic connection`);
             var msg = {
                 command: "close_audio_connector",
                 sessionid: "<%=sessionId%>"
             };
-            button.text('Start Deepgram');
+            button.text('Start Translation');
             button.css('background-color', 'darkslategrey');
-            deepgram_in_use = false;
+            stenomatic_in_use = false;
             ws.send(JSON.stringify(msg));
             console.log(`[${new Date().toISOString()}] Sent close audio connector command`);
         }
@@ -136,17 +136,17 @@
             if (data.sessionid == "<%=sessionId%>") {
                 if (data.is_interim) {
                     // Clear previous interim and show new one
-                    $("#deepgram").find(".interim").remove();
+                    $("#stenomatic").find(".interim").remove();
                     for (const [key, value] of Object.entries(data.messages)) {
                         console.log(`[${new Date().toISOString()}] Interim for Speaker ${key}: ${value}`);
-                        $("#deepgram").append(`<div class="interim">Speaker ${key} -> ${new Date().toLocaleTimeString()} : Transcribing... ${value}</div>`);
+                        $("#stenomatic").append(`<div class="interim">Speaker ${key} -> ${new Date().toLocaleTimeString()} : Transcribing... ${value}</div>`);
                     }
                 } else {
                     // Clear interim and show final
-                    $("#deepgram").find(".interim").remove();
+                    $("#stenomatic").find(".interim").remove();
                     for (const [key, value] of Object.entries(data.messages)) {
                         console.log(`[${new Date().toISOString()}] Final for Speaker ${key}: ${value}`);
-                        $("#deepgram").append(`<div>Speaker ${key} -> ${new Date().toLocaleTimeString()} : ${value}</div>`);
+                        $("#stenomatic").append(`<div>Speaker ${key} -> ${new Date().toLocaleTimeString()} : ${value}</div>`);
                     }
                 }
                 $("#transcription").animate({ scrollTop: $('#transcription').prop("scrollHeight") }, 100);

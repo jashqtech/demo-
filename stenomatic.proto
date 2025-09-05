@@ -1,0 +1,416 @@
+/*
+    Stenomatic service - The Voice SaaS.
+
+    Supports transcription, translation and speech synthesis (TTS), including direct voice-to-voice flow from one language to a different language. Multiple target languages are supported at once e.g. voice-to-voice from English into French, German and Chinese at the same time. It is billed per language i.e. billing is the same for one request with N target languages and N requests with one target language each.
+
+    We support different sets of languages (and constantly add new ones) per-API call and the supported list gen be obtained by calling https://api.stenomatic.com/api/v1/languages with your API key set into the x-mint-api-key HTTP header.
+
+    For API calls that send audio we support only 16kHz sampling rate, MONO only, and two encodings:
+      1) the raw Linear 16 PCM (uncompressed 16-bit signed little-endian samples)
+      2) OGG OPUS
+
+    Every API call, message, and property has its own documentation about its format and potential fallbacks.
+
+    Synthesized voices audio:
+    We do support 16kHz and 8kHz sampling rates for TTS audio in MP3 and raw PCM/RIFF encodings. Not every voice supports the 8kHz sampling rate though -- read the fallbacks section below.
+
+    Fallbacks:
+    In some cases we do a fallback to different parameters than the ones set in the config request. Not every voice is available in every gender and sampling rate. If the gender is not supported, we fallback to the other gender. If a sampling rate is not supported, we fallback to the other sampling rate. We always obey the gender setting, if such a gender is supported in any sampling rate. All voices do support the 16kHz sampling rate.
+
+    Authentication:
+    API calls are authenticated via a header (metadata in gRPC) called x-mint-api-key. Set your API key as its value.
+
+    Request headers:
+    We do support several optional "control" headers that affect the API calls.
+
+    "x-mint-client-request-id" set your own id for the request. Find the request in the logs via this ID later.
+
+    "x-mint-client-request-group-id" this will "group" several different API calls into one e.g. two sides of a phone call -- every side has its own "x-mint-client-request-id" but the same "x-mint-client-request-group-id".
+
+    "x-mint-allow-partial-translate" only for the VoiceTranslate API call. If set to "true" then every "partial" response with transcription will also have a translation of the transcription. Any other value, or when it is missing, should not return "partial translations". It will return it in some cases though.
+
+    "x-mint-send-push-notifications" will enable sending of push notification for API calls via our WebSocket server. We do send them via secure WebSocket endpoint wss://api.stenomatic.com/notifications
+
+    "x-mint-allow-branch-notifications" will send push notifications (if enabled with the option above) in to the client branch's specific topic instead of just to client's topic. Default is false and notifications arrive into the client's topic only.
+
+    "x-mint-debug-record-audio" is for debugging purposes only. It will record the incoming audio ("true") for the SpeechRecognition and VoiceTranslate API calls into a file. This file is saved into a Google Cloud Storage bucket and is automatically deleted after 14 days. Only selected Google Cloud project users can access/download these files.
+
+    "x-mint-api-key" is the authentication header where you put your API key,
+
+    Push notifications:
+    The platform supports sending push notifications for the API calls' responses. We send them via our secure WebSocket endpoint (wss://api.stenomatic.com/notifications) and every 'customer+client+branch+API call" combination has its own channel.
+*/
+syntax = "proto3";
+
+package stenomatic;
+
+option java_multiple_files = true;
+option java_package = "com.mintensive.stenomatic.server";
+option java_outer_classname = "StenomaticProto";
+option go_package = "./mintensive/stenomatic";
+option csharp_namespace = "Stenomatic";
+option cc_enable_arenas = true;
+
+
+// Stenomatic service
+service Stenomatic {
+    // Test connection with the server and your API key. Do not use in production code!
+    rpc Ping (PingRequest) returns (PingReply);
+
+    // Translation.
+    rpc Translate (TranslationRequest) returns (TranslationResponse);
+
+    // Batch Translation of multiple texts from one language to multiple languages.
+    rpc BatchTranslate (BatchTranslationRequest) returns (BatchTranslationResponse);
+
+    // Batch Translation of multiple texts from multiple languages to one target language.
+    rpc BatchTranslateFromMultipleLanguages (BatchTranslationFromMultipleLanguagesRequest) returns (BatchTranslationResponse);
+
+    // TTS i.e. text to speech.
+    //
+    // Voice's sampling rate will fallback to 16kHz if the specified voice is not supported in the wanted sampling rate. Voice's gender will fallback to the other gender if the specified voice is not available in the wanted gender.
+    rpc Tts (TtsRequest) returns (TtsResponse);
+
+    // Synthesizes texts based on pre-defined templates.
+    rpc TemplatedTts (TemplatedTtsRequest) returns (TemplatedTtsResponse);
+
+    // Translation with TTS of the translated texts.
+    //
+    // Voice's sampling rate will fallback to 16kHz if the specified voice is not supported in the wanted sampling rate. Voice's gender will fallback to the other gender if the specified voice is not available in the wanted gender.
+    rpc TranslateAndTts (TranslationTtsRequest) returns (TranslationTtsResponse);
+
+    // Performs bidirectional streaming speech recognition. Stream audio to the server and receive recognized text in real-time.
+    rpc SpeechRecognition (stream SpeechRecognitionRequest) returns (stream SpeechRecognitionResponse);
+
+    // Performs bidirectional streaming speech recognition and translation into multiple languages at once. It is billed per language/characters i.e. billing is the same for one request with N target languages and N requests with one target language each. Responses can contain audio files of the translated text. Could be a RIFF including the header or MP3. Depends on the `AudioEncoding` in `VoiceConfig`.
+    //
+    // Voice's sampling rate will fallback to 16kHz if the specified voice is not supported in the wanted sampling rate. Voice's gender will fallback to the other gender if the specified voice is not available in the wanted gender.
+    rpc VoiceTranslate (stream VoiceTranslateRequest) returns (stream VoiceTranslateResponse);
+
+    // Performs sentiment analysis (natural language processing) on the input text.
+    // Score is in range from -1.0 to 1.0, where negative score is negative sentiment and positive score is positive sentiment. Values around zero can be neutral or mixed sentiment. Mixed means that the text has both positive and negative parts which cancel each out i.e. they have similar magnitudes.
+    rpc AnalyzeSentiment (AnalyzeSentimentRequest) returns (AnalyzeSentimentResponse);
+
+    // Performs entities analysis (natural language processing) on the input text.
+    rpc AnalyzeEntities (AnalyzeEntitiesRequest) returns (AnalyzeEntitiesResponse);
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Ping request to test API key.
+message PingRequest {
+}
+
+// Ping reply with info about the API key.
+message PingReply {
+    // Contains information about the API key.
+    string message = 1;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Voice translation request for multiple target translation languages.
+message VoiceTranslateRequest {
+    // Streaming request must be either a config or audio content. First must be one config request, then 0..N audio content requests. After that close the outgoing stream.
+    oneof streaming_request {
+        // Configuration of the recognition. This must be the first request.
+        VoiceTranslateConfig config = 1;
+
+        // Bytes of audio data chunk in chosen format (Linear PCM or OGG OPUS) with 16kHZ sampling rate, mono audio only. Chunks are sent in sequential `VoiceTranslateRequest` requests. Config request must be sent before the first `audio_content` request. Audio data must be sent in near real-time rate and in ~100ms chunks (3200 bytes for PCM).
+        bytes audio_content = 2;
+    }
+}
+
+// Voice translation configuration for multiple target languages.
+message VoiceTranslateConfig {
+    // The BCP-47 code of the input audio's language e.g. "en-US".
+    string audio_language_code = 1;
+
+    // Array of BCP-47 codes of the target/translation languages e.g. "es-ES","it-IT". At least one code must be set.
+    repeated string target_languages_codes = 2;
+
+    // Voice configuration. See the `VoiceConfig` message.
+    VoiceConfig voice = 3;
+
+    // Audio encoding, Linear PCM (Uncompressed 16-bit signed little-endian samples) or OGG OPUS. 16kHz mono audio only.
+    enum AudioEncoding {
+        LINEAR_16_PCM = 0;
+        OGG_OPUS = 1;
+    }
+    // Linear PCM or OGG OPUS audio encoding. Linear PCM is uncompressed 16-bit signed little-endian samples.
+    AudioEncoding audio_encoding = 4;
+
+    // Array of strings containing words and/or phrases which the speech recognition engine will prefer during recognition.
+    repeated string phrases = 5;
+}
+
+// Configuration of the voice e.g. gender, audio encoding and audio sample rate.
+//
+// Audio sampling rate will fallback to 16kHz if the specified voice is not supported in the wanted sampling rate. Gender will fallback to the other gender if the specified voice is not available in the wanted gender.
+message VoiceConfig {
+    // Voice gender.
+    enum Gender {
+        MALE = 0;
+        FEMALE = 1;
+    }
+    // Male or female voice for TTS. The default is male as per proto3 specification: For enums, the default value is the first defined enum value, which must be 0.
+    Gender gender = 1;
+
+    // Voice audio encoding RIFF or MP3.
+    enum AudioEncoding {
+        MP3 = 0;
+        RIFF_LINEAR_16 = 1;
+    }
+    // RIFF or MP3 audio encoding. RIFF is uncompressed 16-bit signed little-endian (Linear PCM) including the WAV/RIFF header.
+    AudioEncoding audio_encoding = 2;
+
+    // The synthesis' audio sample rate in hertz. Valid values are 0, 8000, 16000 for both MP3 and RIFF/PCM. Set to ZERO to disable TTS i.e. no MP3/WAV is sent back with the spoken translation.
+    int32 audio_sample_rate = 3;
+}
+
+// Response with recognized text, translation and synthesized audio that will be streamed back to the client.
+message VoiceTranslateResponse {
+    // The recognized text from the input audio.
+    string recognition = 1;
+
+    // Array of translations into multiple languages.
+    repeated Translation translations = 2;
+
+    // Array of audio files with the final translated texts for multiple languages. Could be a RIFF including the header or MP3. Depends on the `AudioEncoding` in `VoiceConfig`. They will arrive only for the final recognitions i.e. stable recognized text `is_final` == true. It could arrive together with the final text or it will arrive as a next message with just the audio data.
+    repeated Tts tts = 3;
+
+    // Marks the recognized and translated texts as final i.e. this part of recognition will not change anymore. Once the text is final it will never be sent again and only text in the audio stream after that will be recognized from then on.
+    bool is_final = 4;
+}
+
+// Translation structure that contains the language's BCP-47 code and the text.
+message Translation {
+    // BCP-47 language code of the translated text.
+    string language_code = 1;
+
+    // Translated text.
+    string text = 2;
+}
+
+// TTS structure that contains the audio's BCP-47 language code and the synthesized text in RIFF or MP3 encoding.
+message Tts {
+    // BCP-47 language code of the synthesised audio.
+    string language_code = 1;
+
+    // Bytes of the audio file. Could be a RIFF including the header or MP3. Depends on the `AudioEncoding` in `VoiceConfig`.
+    bytes audio = 2;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Streaming speech recognition request for real-time audio transcription.
+message SpeechRecognitionRequest {
+    // Streaming request must be either a config or audio content. First must be one config request, then 0..N audio content requests. After that close the outgoing stream.
+    oneof streaming_request {
+        // Configuration of the recognition. This must be the first request.
+        SpeechRecognitionConfig config = 1;
+
+        // Bytes of audio data chunk in chosen format (Linear PCM or OGG OPUS) with 16kHZ sampling rate, mono audio only. Chunks are sent in sequential `VoiceTranslateRequest` requests. Config request must be sent before the first `audio_content` request. Audio data must be sent in near real-time rate and in ~100ms chunks (3200 bytes for PCM).
+        bytes audio_content = 2;
+    }
+}
+
+// Streaming speech recognition configuration.
+message SpeechRecognitionConfig {
+    // The BCP-47 code of the input audio's language e.g. "en-US".
+    string audio_language_code = 1;
+
+    // Audio encoding, Linear PCM (Uncompressed 16-bit signed little-endian samples) or OGG OPUS.
+    enum AudioEncoding {
+        LINEAR_16_PCM = 0;
+        OGG_OPUS = 1;
+    }
+    // Linear PCM or OGG OPUS audio encoding. Linear PCM is uncompressed 16-bit signed little-endian samples.
+    AudioEncoding audio_encoding = 2;
+
+    // Array of strings containing words and phrases which the speech recognition engine will prefer during recognition.
+    repeated string phrases = 3;
+}
+
+// Response with audio transcription that will be sent back to client in real-time.
+message SpeechRecognitionResponse {
+    // The recognized text from the input audio.
+    string recognition = 1;
+
+    // Marks the recognized text as final i.e. this part will not change anymore. Once the text is final it will never be sent again and only text in the audio stream after that will be recognized from then on.
+    bool is_final = 2;
+
+    // The latest stable segment to be added to the live/real-time closed-captions. Experimental and not supported for every configuration. DO NOT depend on this. May change or could be removed in the future.
+    string closed_caption = 3;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Translation request that contains the text for translation, source language BCP-47 code and an array of target languages' BCP-47 codes. Supports translation into multiple languages at once. It is billed per language/characters i.e. billing is the same for one request with N target languages and N requests with one target language each.
+message TranslationRequest {
+    // Text for translation.
+    string text = 1;
+
+    // The BCP-47 code of the input text's language e.g. "en-US".
+    string language_code_from = 2;
+
+    // Array of BCP-47 codes of the translation's target languages.
+    repeated string target_languages_codes = 3;
+}
+
+// Translation response with array of translations.
+message TranslationResponse {
+    // Array of translations.
+    repeated Translation translations = 1;
+}
+
+// BatchTranslation request translates multiple texts from (the same) one language into one target language at once. The returned translations are returned in the same order as the inputs.
+message BatchTranslationRequest {
+    // Array of texts for translation.
+    repeated string texts = 1;
+
+    // The BCP-47 code of the input texts' language e.g. "en-US".
+    string language_code_from = 2;
+
+    // The BCP-47 code of the target language.
+    string target_language_code = 3;
+}
+
+// Translation response with array of translations.
+message BatchTranslationResponse {
+    // Array of translation. They are in the same order as the input texts.
+    repeated string translations = 1;
+}
+
+// BatchTranslationFromMultipleLanguagesRequest request translates multiple texts from multiple languages into one target language at once. The returned translations are returned in the same order as the inputs.
+message BatchTranslationFromMultipleLanguagesRequest {
+    // Array of texts for translation.
+    repeated string texts = 1;
+
+    // The BCP-47 codes of the input texts' languages. These must be in the same order as the input texts and their count must be the same.
+    repeated string languages_codes_from = 2;
+
+    // The BCP-47 code of the target language.
+    string target_language_code = 3;
+}
+
+// Translation TTS request for translate + TTS call.
+message TranslationTtsRequest {
+    // Text for translation.
+    string text = 1;
+
+    // The BCP-47 code of the text e.g. "en-US".
+    string language_code_from = 2;
+
+    // Array of BCP-47 languages codes into which the text should be translated.
+    repeated string target_languages_codes = 3;
+
+    // Voice configuration. See the `VoiceConfig` message.
+    VoiceConfig voice = 4;
+}
+
+// Translation TTS response with array of translations and their synthesised audio.
+message TranslationTtsResponse {
+    // Array of translations.
+    repeated Translation translations = 1;
+
+    // Array of audio files with synthesised translated texts for multiple languages. Could be a RIFF including the header or MP3. Depends on the `AudioEncoding` in `VoiceConfig`.
+    repeated Tts tts = 2;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+// TTS request with text, its BCP-47 language code, and voice configuration for speech synthesis.
+message TtsRequest {
+    // Text for speech synthesis.
+    string text = 1;
+
+    // The BCP-47 code of the input text's language e.g. "en-US".
+    string language_code = 2;
+
+    // Voice configuration. See the `VoiceConfig` message.
+    VoiceConfig voice = 3;
+}
+
+// TTS response with raw bytes which could be RIFF or MP3 encoded.
+message TtsResponse {
+    // Bytes of the audio file. Could be a RIFF including the header or MP3. Depends on the `AudioEncoding` in `VoiceConfig`.
+    bytes audio = 1;
+}
+
+message TemplatedTtsRequest {
+    // Client request id
+    int64 id = 1;
+
+    // ID of the template.
+    string template_id = 2;
+
+    // Language of the template
+    string language_code = 3;
+
+    // Data to be filled into the chosen template.
+    repeated string data = 4;
+
+    // Voice configuration. See the `VoiceConfig` message.
+    VoiceConfig voice = 5;
+}
+
+message TemplatedTtsResponse {
+    // Client request id
+    int64 id = 1;
+
+    // BCP-47 language code of the synthesized audio.
+    string language_code = 2;
+
+    // Bytes of the audio file. Could be a RIFF including the header or MP3. Depends on the `AudioEncoding` in `VoiceConfig`.
+    bytes audio = 3;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+message AnalyzeSentimentRequest {
+    // Text for sentiment analysis.
+    string text = 1;
+
+    // The BCP-47 code of the input text's language e.g. "en-US".
+    string language_code = 2;
+}
+
+message AnalyzeSentimentResponse {
+    // Sentiment.
+    enum Sentiment {
+        POSITIVE = 0;
+        NEGATIVE = 1;
+        MIXED = 2;
+        NEUTRAL = 3;
+    }
+    // Sentiment of the input text. Mixed sentiment means that the text has both positive and negative parts in
+    // approximately same amount.
+    Sentiment sentiment = 1;
+
+    // Score of the sentiment from -1.0 - negative, to +1.0 - positive. Values around zero can be neutral or mixed sentiment. Mixed means that the text has both positive and negative parts which cancel each out i.e. they have similar magnitudes.
+    float score = 2;
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+message AnalyzeEntitiesRequest {
+    // Text for entities analysis.
+    string text = 1;
+
+    // The BCP-47 code of the input text's language e.g. "en-US".
+    string language_code = 2;
+}
+
+message AnalyzeEntitiesResponse {
+    // Array of found entities and their types.
+    repeated NlpEntity entities = 1;
+}
+
+message NlpEntity {
+    // Entity name i.e. a token/word from the input text.
+    string name = 1;
+
+    // Type in upper case e.g. PERSON, PLACE, etc.
+    string type = 2;
+}

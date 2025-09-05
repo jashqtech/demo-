@@ -96,4 +96,4 @@ window.startSession =(sessionId, token, apiKey) => {
 try {
 } catch (e) {
 	console.log('No session yet');
-}
+}  
